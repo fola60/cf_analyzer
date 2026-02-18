@@ -115,12 +115,51 @@ def add_snapshots(username):
     print("Snapshots added for user: ", username)
     
 
+def compute_tag_ratios(problems):
+    """Return the fraction of attempted problems per tag (multi-label: each
+    problem may contribute to multiple tags)."""
+    tag_counts = defaultdict(int)
+    total = len(problems)
+    if total == 0:
+        return {}
+    for p in problems:
+        for tag in p["tags"]:
+            tag_counts[tag] += 1
+    return {tag: count / total for tag, count in sorted(tag_counts.items(), key=lambda x: -x[1])}
+
+
 def analyze_snapshot(snapshot):
     problems = snapshot["problems_last_30"]
     rating_at_t = snapshot["rating_at_t"]
 
     accepted = [p for p in problems if p["verdict"] == "OK"]
     ratings = [p["rating"] for p in accepted if p["rating"] > 0]
+
+    # Tag ratios across all attempted problems and accepted-only problems
+    all_tag_ratios = compute_tag_ratios(problems)
+    accepted_tag_ratios = compute_tag_ratios(accepted)
+
+    # Rating-bucket distribution of accepted problems
+    rating_buckets = {"<=800": 0, "<=1200": 0, "<=1600": 0, "<=2000": 0,
+                      "<=2400": 0, "<=3000": 0, ">3000": 0}
+    for r in ratings:
+        if r <= 800:
+            rating_buckets["<=800"] += 1
+        elif r <= 1200:
+            rating_buckets["<=1200"] += 1
+        elif r <= 1600:
+            rating_buckets["<=1600"] += 1
+        elif r <= 2000:
+            rating_buckets["<=2000"] += 1
+        elif r <= 2400:
+            rating_buckets["<=2400"] += 1
+        elif r <= 3000:
+            rating_buckets["<=3000"] += 1
+        else:
+            rating_buckets[">3000"] += 1
+
+    total_rated = len(ratings)
+    rating_bucket_ratios = {k: v / max(total_rated, 1) for k, v in rating_buckets.items()}
 
     features = {
         "num_attempts": len(problems),
@@ -129,7 +168,10 @@ def analyze_snapshot(snapshot):
         "avg_problem_rating": mean(ratings) if ratings else 0,
         "avg_rating_gap": mean(r - rating_at_t for r in ratings) if ratings else 0,
         "max_problem_rating": max(ratings, default=0),
-        "percent_above_rating": len([r for r in ratings if r > rating_at_t]) / max(len(ratings),1)
+        "percent_above_rating": len([r for r in ratings if r > rating_at_t]) / max(len(ratings), 1),
+        "all_tag_ratios": all_tag_ratios,
+        "accepted_tag_ratios": accepted_tag_ratios,
+        "rating_bucket_ratios": rating_bucket_ratios,
     }
 
     return features
@@ -137,13 +179,21 @@ def analyze_snapshot(snapshot):
         
     
 if __name__ == "__main__":
+    TARGET_USERS = 20
+    collected = []
+
     for page_number in range(1, 7):
-        page_html = open(f"./data/ratings_page_{page_number}.html");
+        if len(collected) >= TARGET_USERS:
+            break
+        page_html = open(f"./data/ratings_page_{page_number}.html")
         page = BeautifulSoup(page_html.read(), 'html.parser')
-        users_a_tags = page.find_all('a', class_ = "rated-user")
+        users_a_tags = page.find_all('a', class_="rated-user")
         for user in users_a_tags:
-            href = user.get("href")          
-            username = href.split("/")[-1]   
+            if len(collected) >= TARGET_USERS:
+                break
+            href = user.get("href")
+            username = href.split("/")[-1]
+            collected.append(username)
             add_snapshots(username)
 
     output = json.dumps(
@@ -152,7 +202,7 @@ if __name__ == "__main__":
     )
     with open("./data/snapshots.json", "w") as f:
         f.write(output)
-    print(f"Saved {len(SNAPSHOTS)} snapshots to ./data/snapshots.json")
+    print(f"Saved {len(SNAPSHOTS)} snapshots to ./data/snapshots.json from {len(collected)} users")
 
 
 
